@@ -18,7 +18,7 @@ def _mk(notes: list[dict], uncertain_below: float = 0.6) -> list[Note]:
         c = n.get("confidence")
         out.append(Note(start=n["start"], end=n["end"], pitch=n["pitch"], confidence=c,
                         velocity=int(np.clip(50 + 50 * (c or 0.5), 30, 110)),
-                        uncertain=bool(n.get("overtone_suspect") or (c is not None and c < uncertain_below))))
+                        uncertain=bool(n.get("overtone_suspect") or n.get("repaired") or (c is not None and c < uncertain_below))))
     return out
 
 
@@ -51,7 +51,11 @@ def run(ctx: Ctx) -> None:
             warnings.append("Separation ran, but the voice stem is almost silent (under 3% of the energy): no singing was detected in this recording, so no vocal melody was tracked.")
         warnings.append("No usable separated voice stem was available. The 'melody' is therefore only the highest detected line of the full mix: it follows whatever is on top, voices or instruments, and has gaps.")
     track = mu.pitch_track(ym, sr)
-    melody = mu.split_at_onsets(mu.notes_from_pitch_track(track), ym, sr) if vocals else []
+    melody, mel_stats = [], {}
+    if vocals:
+        track["tuning_cents"] = mu.tuning_offset_cents(ym, sr)
+        melody, mel_stats = mu.clean_melody(mu.notes_from_pitch_track(track))
+        melody = mu.split_at_onsets(melody, ym, sr)
     voiced = np.nan_to_num(track["prob"]) * (~np.isnan(track["f0"]))
     npz = ctx.tmp / "pitch_track.npz"
     np.savez_compressed(npz, times=track["times"].astype(np.float32), f0=np.nan_to_num(track["f0"]).astype(np.float32),
@@ -121,7 +125,7 @@ def run(ctx: Ctx) -> None:
         + (" Your existing imported/edited score was kept as the current version; this transcription is stored as an alternative." if protected else ""),
         {"score_version_id": sv.id, "became_current": not protected, "tempo": tb | {"beats": len(tb["beats"])}, "key": key,
          "tuning_offset_cents": tuning, "chords": len(chords), "melody_notes": mel_count, "polyphonic_notes": poly_count,
-         "low_confidence_notes": low, "polyphonic_cleanup": poly_stats, "mean_confidence": round(float(np.mean(confs)), 2) if confs else None,
+         "low_confidence_notes": low, "polyphonic_cleanup": poly_stats, "melody_cleanup": mel_stats, "mean_confidence": round(float(np.mean(confs)), 2) if confs else None,
          "voiced_ratio": round(float(np.mean(voiced > 0.5)), 2), "warnings": warnings, "invalidation": inv,
          "artifacts": {"pitch_track": pt_asset.id},
          "uncertainty": "Everything here is an estimate. Meter detection in particular is weak (it only distinguishes 3 from 4 beats). "

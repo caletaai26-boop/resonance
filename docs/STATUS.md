@@ -1,6 +1,6 @@
 # Status, limitations and roadmap
 
-Last verified against the automated suite and the browser journey on the synthetic test recording. **No real Christmas Mass recording has been processed yet**: none was available in the build environment. Every accuracy figure below comes from a clean synthetic fixture and is an upper bound on what a noisy, reverberant phone recording of a choir will achieve.
+Verified against the automated suite, the browser journey, and the first real recording (the Gibraltar Christmas Mass *Adeste Fideles*, 3 min 44 s phone recording). Synthetic-fixture figures are an upper bound; the real-recording findings in section 2b are what to plan around.
 
 ## 1. Feature-completion matrix
 
@@ -22,7 +22,8 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 | | Melody from the voice stem (pYIN) | Works | Needs separation to have found voices |
 | | Polyphonic notes (Basic Pitch) with clean-up | Partial | See measured accuracy; many errors expected on real choir audio |
 | | SATB voice assignment | Partial | Register sorting (top/middle/bottom), not true voice separation |
-| | Import MIDI / MusicXML, takes priority over auto-transcription | Works | Imported scores follow their own tempo, not the performers' |
+| | Import MIDI / MusicXML, takes priority over auto-transcription | Works | |
+| Agent 3b Alignment | Place an imported score on the recording's timing, in the key sung, section by section | Works | Fixture: key found; 78% of melody notes within 0.2 s, median error 0.07 s. Needs a verified section timeline |
 | | Read notes from a PDF score (OMR) | Not available | PDF stored as reference only |
 | Agent 4 Lyrics | Automatic recognition of sung words | Not available | Needs Whisper + model; even then sung Latin is unreliable |
 | | Typed text or reference text → timed draft, pronunciation guide, syllable underlay | Works | Timings are arithmetic, flagged unverified; Latin reference: Adeste Fideles |
@@ -64,6 +65,21 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 
 **How to read this.** Even on a clean synthetic organ, automatic polyphonic transcription misses about half the notes and one in four reported notes is wrong. A real choir in a reverberant church, recorded on a phone with talking, will be materially worse. This is why the product is built around human review and why an imported, trusted score always takes priority. The single most valuable input you can provide is the sheet music the choir sang from (as MusicXML or MIDI).
 
+## 2b. First real recording: Adeste Fideles, Christmas Mass (phone, 224 s)
+
+| Step | What happened |
+|---|---|
+| Forensics | −12.7 LUFS, no clipping, background only ~7 dB below the music, almost nothing above 2.2 kHz (phone microphone + compression) |
+| Separation | Worked: voices 21% of energy, accompaniment 66% |
+| Key | D major at 69%, with G major and A major almost tied: **not trustworthy** |
+| Metre | 3/4: **wrong** (the hymn is in duple time) |
+| Melody (pYIN on voice stem) | 361 notes, 40% shorter than 0.2 s, 175 semitone wobbles, 72 leaps of a fifth or more. A monophonic tracker cannot follow a four-part choir in a reverberant church. After the new clean-up: 278 notes, 54 wobbles, 34 leaps. Less chaotic, **still not the melody** |
+| Polyphonic notes | 126 notes for 224 s: far too sparse; thresholds tuned on the synthetic organ are too strict for this audio |
+| Sections | 19 fragments instead of intro / verses / refrains / interlude |
+| Render | Faithfully reproduced those wrong notes, which is why it sounded "crazy" |
+
+**Conclusion.** Automatic transcription is not a viable source of the score for a live choir recording of this quality. The workable path is: import a trusted score of the hymn (MusicXML/MIDI) → correct the section timeline → align the score to the recording → listen and fix differences. The alignment step was built in response to this result.
+
 ## 3. Known limitations
 
 **Musical**
@@ -71,7 +87,7 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 - A repeated note sung legato on the same pitch can merge into one long note.
 - A melody is only tracked when separation finds voices (voice stem ≥ 3% of energy). Otherwise the "melody" is the top line of the polyphonic result.
 - Lyric timings and syllable underlay are drafts produced by arithmetic, not by listening.
-- An imported score is not automatically warped to the performers' timing. The comparison handles this with an alignment map, but the render then follows the score's tempo, not the recording's rubato. Score-to-audio alignment is the first roadmap item.
+- Alignment assumes the choir performed what the imported score says. Where they did something else (different harmony, descant, verse order) the result follows the score until you correct it. It also depends on a sensible section timeline: each section must lie within one pass of the hymn.
 - Noise reduction estimates noise from the quietest 10% of frames; on a recording with no pause at all it can slightly dull sustained tones.
 
 **Sound quality**
@@ -107,7 +123,7 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 ## 5. Recommended next milestones
 
 1. **Process the real Adeste Fideles recording** and record how far automatic analysis gets. Everything after this should be prioritised by what that shows.
-2. **Score-to-audio alignment.** Import the hymn's standard SATB score, warp it onto the recording's timeline (DTW on chroma), then correct only the differences. This is the fastest route to an accurate score and removes the dependence on polyphonic transcription.
+2. **Score-to-audio alignment: built.** Next: test it on the real recording once a MusicXML score is imported; tune section detection for hymns (it fragments into ~19 pieces); detect where the performance departs from the score (extra verses, a descant, changed harmony).
 3. **Human choir session** using the rehearsal pack, to produce the first genuinely faithful reconstruction end to end.
 4. **Instrument quality**: a proper pipe-organ sample set and SFZ support; velocity/expression curves derived from the original's level envelope.
 5. **Whisper integration** for a first-pass lyric draft, with forced alignment to give real line timings.

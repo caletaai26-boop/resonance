@@ -119,7 +119,7 @@ export default function ScoreTab() {
   if (!doc) return null;
   if (!score)
     return <div className="space-y-4">{importMsg && <div className="callout-info">{importMsg}</div>}
-      <Empty title="No score yet">A score is the list of notes that will be performed. Either let the Transcription agent estimate one from the recording, import a score you trust, or start an empty one and enter notes by hand.
+      <Empty title="No score yet">A score is the list of notes that will be performed. Best: import the score the choir sang from (MusicXML or MIDI), then align it to the recording. Alternatively let the Transcription agent guess one from the audio (unreliable on a choir), or enter notes by hand.
         <div className="mt-4 flex flex-wrap gap-2 justify-center"><button className="btn-primary" disabled={s.working} onClick={() => s.runAgent("transcription")}>Transcribe from the recording</button>{importer}
           <button className="btn btn-sm" onClick={() => { const id = uid(); setScore({ key: null, key_confidence: null, time_signature: [4, 4], meter_confidence: null, tempo_bpm: 90, tempo_curve: [], beats: [], downbeat_offset: 0, duration: s.player.duration, chords: [], warnings: [], parts: [{ id, name: "Melody", role: "vocal", voice: "melody", program: 52, source: "user", notes: [] }] }); setActive(id); setDirty(true); }}>Start an empty score</button></div></Empty></div>;
 
@@ -131,6 +131,16 @@ export default function ScoreTab() {
   return (
     <div className="space-y-4">
       {importMsg && <div className="callout-info flex justify-between gap-3"><span>{importMsg}</span><button onClick={() => setImportMsg(null)}>✕</button></div>}
+      {doc.current?.origin.startsWith("import") && !dirty && (
+        <div className="rounded-lg border border-copper/50 bg-copper/5 px-3 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-[13px] max-w-2xl"><span className="text-copper-soft font-medium">This imported score is not yet on the recording's timing.</span>{" "}
+            <span className="text-ivory-dim">Align it: RESONANCE finds the key the choir actually sang in, matches every section of your timeline to the right part of the score, and moves each note to where the performers placed it. Check the Structure tab first: sung parts are placed only in sections marked “Voices”.</span></div>
+          <button className="btn-primary btn-sm shrink-0" disabled={s.working} onClick={() => s.runAgent("alignment", { score_version_id: doc.current!.id })}>Align to the recording</button>
+        </div>
+      )}
+      {doc.current?.origin.startsWith("auto-transcription") && (
+        <div className="callout"><span className="text-amber font-medium">This score was guessed from the recording.</span> On a live choir, automatic transcription is unreliable: several voices sing at once in a reverberant room, and the result has many wrong and missing notes. For a faithful result, import the score the choir sang from (MusicXML or MIDI, e.g. a public-domain SATB edition) and align it to the recording.</div>
+      )}
       {score.warnings.length > 0 && <ul className="callout space-y-1 list-disc pl-6">{score.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
       <Panel title={<span className="flex items-center gap-2">Score editor <StatusChip status={doc.current?.verification === "approved" && !dirty ? "approved" : "unverified"} label={dirty ? "Unsaved edits" : doc.current?.verification === "approved" ? "Approved" : "Not yet approved"} /></span>}
         action={<div className="flex items-center gap-2">

@@ -154,6 +154,50 @@ def split_at_onsets(notes: list[dict], y: np.ndarray, sr: int, min_piece: float 
     return out
 
 
+def clean_melody(notes: list[dict], scoop_max: float = 0.25, min_dur: float = 0.12) -> tuple[list[dict], dict]:
+    """Repair the typical failure of a monophonic pitch tracker on a choir in a reverberant room:
+    1. scoops and vibrato show up as runs of short notes a semitone apart (C#-D-C#): merge neighbours that
+       are at most a semitone apart when one of them is short, keeping the pitch held longest;
+    2. the tracker jumps between voices or locks onto a harmonic: fold notes lying an octave away from
+       their neighbourhood back into it and flag them;
+    3. drop fragments still shorter than min_dur.
+    Returns (notes, stats). Every repaired note is flagged uncertain."""
+    stats = {"merged_scoops": 0, "octave_folded": 0, "dropped_fragments": 0}
+    ns = [dict(n) for n in sorted(notes, key=lambda n: n["start"])]
+    changed = True
+    while changed:
+        changed = False
+        out: list[dict] = []
+        for n in ns:
+            if out:
+                a = out[-1]
+                da, dn = a["end"] - a["start"], n["end"] - n["start"]
+                if n["start"] - a["end"] <= 0.1 and abs(n["pitch"] - a["pitch"]) <= 1 and min(da, dn) < scoop_max:
+                    keep = a if da >= dn else n
+                    out[-1] = {**a, "end": max(a["end"], n["end"]), "pitch": keep["pitch"],
+                               "confidence": round(((a.get("confidence") or 0.5) * da + (n.get("confidence") or 0.5) * dn) / (da + dn + 1e-9), 2),
+                               "repaired": True}
+                    stats["merged_scoops"] += 1
+                    changed = True
+                    continue
+            out.append(n)
+        ns = out
+    for i, n in enumerate(ns):
+        neigh = [ns[k]["pitch"] for k in range(max(0, i - 3), min(len(ns), i + 4)) if k != i]
+        if len(neigh) >= 2:
+            med = float(np.median(neigh))
+            for shift in (-12, 12):
+                if abs(n["pitch"] - med) >= 9 and abs(n["pitch"] + shift - med) < abs(n["pitch"] - med) - 4:
+                    n["pitch"] += shift
+                    n["repaired"] = True
+                    n["confidence"] = round((n.get("confidence") or 0.5) * 0.7, 2)
+                    stats["octave_folded"] += 1
+                    break
+    kept = [n for n in ns if n["end"] - n["start"] >= min_dur]
+    stats["dropped_fragments"] = len(ns) - len(kept)
+    return kept, stats
+
+
 def notes_from_pitch_track(track: dict, min_dur: float = 0.09) -> list[dict]:
     """Segment an f0 contour into notes: consecutive voiced frames whose rounded MIDI pitch is stable
     (after a 5-frame median filter) form one note. Confidence = mean voicing probability."""
@@ -162,7 +206,7 @@ def notes_from_pitch_track(track: dict, min_dur: float = 0.09) -> list[dict]:
     f0, times, prob = track["f0"], track["times"], track["prob"]
     midi = np.full(len(f0), np.nan)
     ok = ~np.isnan(f0)
-    midi[ok] = 69 + 12 * np.log2(f0[ok] / 440.0)
+    midi[ok] = 69 + 12 * np.log2(f0[ok] / 440.0) - float(track.get("tuning_cents", 0.0)) / 100.0  # sing-flat/sharp choirs round correctly
     q = np.where(ok, np.round(midi), -1)
     q = medfilt(q, 5)
     notes, start = [], None

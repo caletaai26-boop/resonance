@@ -52,7 +52,7 @@ def job_dict(j: m.Job) -> dict:
 
 
 NEXT_HINT = {
-    "forensics": "Run the analysis", "separation": "Runs after forensics", "transcription": "Runs after separation",
+    "forensics": "Run the analysis", "separation": "Runs after forensics", "transcription": "Runs after separation", "alignment": "Import a score on the Score tab, then align it",
     "lyrics": "Paste the words you hear or load a reference text", "structure": "Runs after transcription",
     "arrangement": "Build after the score is approved", "choir": "Prepare rehearsal pack once an arrangement exists",
     "instrumental": "Render once the arrangement is approved", "mixing": "Runs after rendering", "mastering": "Runs after mixing",
@@ -115,7 +115,7 @@ def status(db: Session, project: m.Project) -> dict:
         }[g]
         todo = {
             2: "Run structural analysis so there is a section timeline to review.",
-            3: "Run the transcription or import a MIDI/MusicXML score.",
+            3: "Import the score the choir used (MusicXML/MIDI) and align it, or run the transcription.",
             4: "Build the arrangement from the approved score.",
             5: "Render and mix the arrangement." if project.mode != "restore" else "Run the restoration.",
             6: "Run the Fidelity Inspector on the current render.",
