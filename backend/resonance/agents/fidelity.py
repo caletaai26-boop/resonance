@@ -146,10 +146,14 @@ def run(ctx: Ctx) -> None:
         r0, r1 = mu.map_time(al["path"], s["start"]), mu.map_time(al["path"], s["end"])
         seg = yr[int(r0 * sr): int(r1 * sr)]
         e_r = float(np.sqrt(np.mean(seg**2) + 1e-12)) if seg.size else 0.0
+        # Audio alignment alone cannot be trusted here: when a passage is missing, time-warping stretches the
+        # neighbouring music (or the reverb tail) across the hole. So also ask the score directly.
+        if sv is not None and not any(s["start"] - 0.05 <= n["start"] < s["end"] for p in sv.data.get("parts", []) for n in p["notes"]):
+            e_r = 0.0
         sec_rows.append({"label": s["label"], "start": s["start"], "end": s["end"], "harmonic_similarity": round(v, 3),
                          "original_has_sound": e_o > 1e-3, "reconstruction_has_sound": e_r > 1e-3})
         if e_o > 1e-3 and e_r <= 1e-3:
-            disc.append(_disc("missing_section", s["start"], f"'{s['label']}' contains music", "silent in the reconstruction", 0.95,
+            disc.append(_disc("missing_section", s["start"], f"'{s['label']}' contains music", "no notes in the reconstruction", 0.95,
                               "The score has no notes here. Transcribe or enter this passage.", severity="error"))
     if sec_rows:
         med = float(np.median([r["harmonic_similarity"] for r in sec_rows]))

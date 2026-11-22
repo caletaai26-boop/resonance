@@ -106,14 +106,17 @@ def run(ctx: Ctx) -> None:
         inv = gates.invalidate(ctx.db, ctx.project, "score", "A new automatic transcription replaced the current score.")
     ctx.db.commit()
 
+    mel_part = next((p for p in data["parts"] if p["voice"] == "melody"), None)
+    mel_count = len(mel_part["notes"]) if mel_part else 0
+    mel_kind = "melody (from the voice stem)" if vocals else "top-line melody-candidate"
     confs = [n["confidence"] for p in data["parts"] for n in p["notes"] if n.get("confidence") is not None]
     low = sum(1 for p in data["parts"] for n in p["notes"] if n.get("uncertain"))
     ctx.output(
         f"Estimated tempo {tb['tempo_bpm']:.0f} BPM, key {key['key']} (confidence {key['confidence']:.0%}), "
-        f"{len(melody)} melody notes and {poly_count} polyphonic notes. {low} of {len(confs)} notes are flagged uncertain (low confidence or possible overtone) for review."
+        f"{mel_count} {mel_kind} notes and {poly_count} polyphonic notes in total. {low} of {len(confs)} notes are flagged uncertain (low confidence or possible overtone) for review."
         + (" Your existing imported/edited score was kept as the current version; this transcription is stored as an alternative." if protected else ""),
         {"score_version_id": sv.id, "became_current": not protected, "tempo": tb | {"beats": len(tb["beats"])}, "key": key,
-         "tuning_offset_cents": tuning, "chords": len(chords), "melody_notes": len(melody), "polyphonic_notes": poly_count,
+         "tuning_offset_cents": tuning, "chords": len(chords), "melody_notes": mel_count, "polyphonic_notes": poly_count,
          "low_confidence_notes": low, "polyphonic_cleanup": poly_stats, "mean_confidence": round(float(np.mean(confs)), 2) if confs else None,
          "voiced_ratio": round(float(np.mean(voiced > 0.5)), 2), "warnings": warnings, "invalidation": inv,
          "artifacts": {"pitch_track": pt_asset.id},

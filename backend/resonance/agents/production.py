@@ -266,6 +266,9 @@ def run_mix(ctx: Ctx) -> None:
     if bus is None:
         raise Blocked("All tracks are muted.")
     ctx.progress(0.6, f"Adding acoustic space: {dsp.REVERB_PRESETS.get(cfg['reverb_preset'], {}).get('label', cfg['reverb_preset'])}")
+    loud = np.where(np.max(np.abs(bus), axis=1) > 10 ** (-60 / 20) * (np.max(np.abs(bus)) + 1e-12))[0]
+    if loud.size:  # drop the synthesiser's trailing silence so the ending lines up with the original
+        bus = bus[: min(len(bus), loud[-1] + int(0.3 * sr))]
     bus = dsp.stereo_width(bus, float(cfg.get("width", 1.0)))
     if cfg.get("bus_compress"):
         bus, _ = dsp.compress(bus, sr, threshold_db=-18, ratio=1.5, attack_ms=40, release_ms=400)

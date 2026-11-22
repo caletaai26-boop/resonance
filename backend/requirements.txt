@@ -1,0 +1,32 @@
+# RESONANCE backend - direct dependencies, pinned to the versions the test suite passed with (Python 3.13).
+# System packages also required: ffmpeg, fluidsynth, a General MIDI SoundFont (e.g. fluid-soundfont-gm).
+#
+# Install:
+#   pip install -r requirements.txt
+#   pip install --no-deps basic-pitch==0.4.0   # its declared TensorFlow/resampy pins do not resolve on Python 3.13;
+#                                              # the ONNX model it ships runs with onnxruntime + the two helpers below
+
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.9
+pydantic==2.14.4
+python-multipart==0.0.34
+numpy==2.5.5
+scipy==1.18.1
+soundfile==0.14.0
+librosa==1.0.1
+pyloudnorm==0.2.0
+pretty_midi==0.2.11.post0
+mido==1.3.3
+music21==10.5.2
+pillow==13.0.0
+onnxruntime==1.32.0
+demucs==4.1.0
+torch==2.15.0
+anthropic==2.12.0
+httpx==0.28.1
+pytest==9.2.0
+
+# runtime helpers needed by basic-pitch (installed with --no-deps above)
+resampy==0.4.3
+mir_eval==0.8.2

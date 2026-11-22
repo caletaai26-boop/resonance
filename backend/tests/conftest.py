@@ -55,3 +55,27 @@ def new_project(client, title="Test hymn", mode="faithful"):
     r = client.post("/api/projects", json={"title": title, "mode": mode, "language": "la", "rights_acknowledged": True})
     assert r.status_code == 201, r.text
     return r.json()
+
+
+@pytest.fixture(scope="session")
+def session_client(app):
+    return make_client(app, "owner@example.org")
+
+
+@pytest.fixture(scope="session")
+def analysed(session_client, fixture_audio):
+    """One project taken through the real automatic analysis pipeline (forensics → separation → transcription → structure)."""
+    import helpers
+    c = session_client
+    pid = new_project(c, "Analysed fixture")["id"]
+    helpers.ok(helpers.upload_source(c, pid, fixture_audio["mp3"]))
+    helpers.ok(c.post(f"/api/projects/{pid}/pipeline/analyse"))
+    helpers.drain()
+    return pid
+
+
+@pytest.fixture(scope="session")
+def produced(session_client, fixture_audio):
+    """A fully rendered, mixed, mastered and inspected project built from the ground-truth score. Read-only for tests."""
+    import helpers
+    return helpers.build_rendered_project(session_client, fixture_audio, "Produced fixture")
