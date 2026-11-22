@@ -12,8 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fluidsyn
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt \
-    && pip install --no-cache-dir --no-deps basic-pitch==0.4.0
+# CPU-only PyTorch (no multi-GB CUDA libraries). Demucs and Basic Pitch are installed without their declared
+# dependencies: Demucs lists 'sphn' (needs a Rust/C toolchain on arm64) and Basic Pitch lists TensorFlow;
+# RESONANCE uses neither, only the packages installed explicitly below.
+RUN pip install --no-cache-dir torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
+    && grep -v -i -E '^(torch|demucs)==' backend/requirements.txt > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir einops julius pyyaml tqdm \
+    && pip install --no-cache-dir --no-deps demucs==4.1.0 basic-pitch==0.4.0 \
+    && python -c "import demucs.pretrained, demucs.apply, basic_pitch, librosa, onnxruntime; print('audio stack imports OK')"
 COPY backend/ backend/
 COPY --from=web /web/dist frontend/dist
 ENV RESONANCE_DATA_DIR=/data RESONANCE_FRONTEND_DIST=/app/frontend/dist PYTHONUNBUFFERED=1
