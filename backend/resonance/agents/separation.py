@@ -64,9 +64,36 @@ def run(ctx: Ctx) -> None:
     wav = torch.from_numpy(np.ascontiguousarray(y[:, :2].T)).float()
     ref = wav.mean(0)
     mean, std = ref.mean(), ref.std() + 1e-8
-    ctx.progress(0.15, "Separating (this is the slow step: roughly as long as the recording itself on CPU)")
-    with torch.no_grad():
-        out = apply_model(model, ((wav - mean) / std)[None], device="cpu", shifts=0, split=True, overlap=0.25, progress=False)[0]
+    ctx.progress(0.15, "Separating: starting (the slow step, runs on the CPU)")
+    import time
+
+    import demucs.apply as dapply
+
+    real_tqdm = dapply.tqdm.tqdm
+    t0 = time.monotonic()
+
+    def reporting(iterable, *args, **kwargs):
+        # Demucs processes the recording in overlapping chunks; report each finished chunk as real progress.
+        items = list(iterable)
+        total = max(1, len(items))
+        last = 0.0
+        for k, item in enumerate(items, 1):
+            yield item
+            now = time.monotonic()
+            if now - last >= 2.0 or k == total:
+                last = now
+                done = k / total
+                elapsed = now - t0
+                eta = elapsed / done * (1 - done) if done > 0 else 0
+                ctx.progress(0.15 + 0.7 * done, f"Separating: chunk {k} of {total}, about {max(0, int(eta // 60))} min {int(eta % 60)} s left")
+
+    dapply.tqdm.tqdm = reporting
+    try:
+        with torch.no_grad():
+            out = apply_model(model, ((wav - mean) / std)[None], device="cpu", shifts=0, split=True, overlap=0.25, progress=True)[0]
+    finally:
+        dapply.tqdm.tqdm = real_tqdm
+    ctx.log(f"Separation took {time.monotonic() - t0:.0f} s")
     out = (out * std + mean).numpy()  # [sources, channels, n]
     names = list(model.sources)
     ctx.progress(0.85, "Writing stems")
