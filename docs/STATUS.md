@@ -78,6 +78,12 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 | Sections | 19 fragments instead of intro / verses / refrains / interlude |
 | Render | Faithfully reproduced those wrong notes, which is why it sounded "crazy" |
 
+**Score alignment on this recording (tested with 5 public-domain CPDL editions).**
+- Key: settled from the final cadence (E major → A major, bass A): **A major**, consistent across editions.
+- Verse length: the harmony repeats every **42.1 s** (one verse + refrain), detected from the recording itself.
+- Timing alignment: **weak**. Sung pitches agree with the aligned score 53–55% vs ~30% for a misplaced copy, but the rendered result follows the original's harmony at 0.70 (misaligned baseline 0.63), *worse* than the earlier transcription-based render (0.85), whose chaotic notes were at least derived from the audio. No tempo hypothesis or edition did materially better (0.57–0.61 vs ~0.50 baseline). Likely causes: the choir's arrangement differs from these editions, and/or reverberation blurs the harmony too much for chroma alignment.
+- Restore mode on the same recording: noise floor −21 → −31 dB, music-to-quietest gap 7.0 → 9.4 dB, slight high-frequency lift. A modest, real improvement of the actual performance.
+
 **Conclusion.** Automatic transcription is not a viable source of the score for a live choir recording of this quality. The workable path is: import a trusted score of the hymn (MusicXML/MIDI) → correct the section timeline → align the score to the recording → listen and fix differences. The alignment step was built in response to this result.
 
 ## 3. Known limitations

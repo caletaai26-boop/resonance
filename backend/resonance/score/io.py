@@ -11,6 +11,15 @@ from .model import Note, Part, Score, validate_score
 VOCAL_HINTS = ("sopran", "alto", "tenor", "bass voice", "bajo", "choir", "coro", "voice", "voz", "vocal", "cantus", "satb")
 
 
+INSTRUMENT_HINTS = ("organ", "organo", "orgel", "piano", "pno", "keyboard", "kbd", "harmonium", "guitar", "violin", "viola", "cello",
+                    "flute", "oboe", "clarinet", "trumpet", "horn", "trombone", "harp", "accomp", "continuo", "strings")
+
+
+def _is_instrument(name: str) -> bool:
+    n = (name or "").lower()
+    return any(h in n for h in INSTRUMENT_HINTS)
+
+
 def _is_vocal(name: str, program: int | None = None) -> bool:
     n = (name or "").lower()
     return any(h in n for h in VOCAL_HINTS) or program in (52, 53, 54)
@@ -110,6 +119,12 @@ def musicxml_to_score(path: Path) -> dict:
         voice = next((v for v in ("soprano", "alto", "tenor", "bass") if v in low), "melody" if i == 0 else "harmony")
         parts.append(Part(name=name, role="vocal" if vocal else "instrument", voice=voice,
                           program=52 if vocal else 19, source="import:musicxml", notes=notes))
+    # Choir scores often print the words only under the upper stave. If any part carries lyrics, every part that
+    # is not explicitly an instrument (organ, piano...) is treated as sung: otherwise tenor and bass vanish.
+    if any(p.role == "vocal" for p in parts):
+        for p in parts:
+            if p.role == "instrument" and p.notes and not _is_instrument(p.name):
+                p.role, p.program = "vocal", 52
     total_q = float(sc.highestTime)
     s = Score(tempo_bpm=bpm, time_signature=(ts.numerator, ts.denominator) if ts else (4, 4),
               beats=[round(k * spq, 4) for k in range(int(total_q) + 1)], duration=total_q * spq,
