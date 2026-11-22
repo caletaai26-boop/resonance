@@ -76,12 +76,13 @@ class Worker:
             dep_id = (j.params or {}).get("after")
             if dep_id:
                 dep = db.get(m.Job, dep_id)
-                if dep and dep.status in ("failed", "cancelled"):
+                # Separation is optional: if it fails, later steps still run on the full mix.
+                if dep and dep.status in ("failed", "cancelled") and dep.agent != "separation":
                     j.status, j.finished_at = "cancelled", m.now()
                     j.error = f"Not run because the step it depends on ({dep.agent}) did not complete."
                     db.commit()
                     continue
-                if dep and dep.status not in ("succeeded", "blocked"):
+                if dep and dep.status not in ("succeeded", "blocked", "failed", "cancelled"):
                     continue
             j.status, j.started_at, j.attempts = "running", m.now(), j.attempts + 1
             j.progress, j.step, j.error = 0.0, "Starting", ""

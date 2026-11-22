@@ -44,57 +44,69 @@ def run(ctx: Ctx) -> None:
     st = engine_status()
     if not st["installed"]:
         raise Blocked("Demucs is not installed on the server. " + SETUP_HELP)
-    ctx.progress(0.05, f"Loading separation model '{settings.demucs_model}'")
-    try:
-        model = load_model()
-    except Exception as e:
-        raise Blocked(f"{SETUP_HELP} (Technical detail: {str(e)[:160]})")
-
-    import torch
-    from demucs.apply import apply_model
-
-    y, sr = aio.load(ctx.path(work))
-    if sr != model.samplerate:
-        import librosa
-
-        y = librosa.resample(y.T, orig_sr=sr, target_sr=model.samplerate).T
-        sr = model.samplerate
-    if y.shape[1] == 1:
-        y = np.repeat(y, 2, axis=1)
-    wav = torch.from_numpy(np.ascontiguousarray(y[:, :2].T)).float()
-    ref = wav.mean(0)
-    mean, std = ref.mean(), ref.std() + 1e-8
-    ctx.progress(0.15, "Separating: starting (the slow step, runs on the CPU)")
+    import os
+    import subprocess
+    import sys
     import time
 
-    import demucs.apply as dapply
+    import soundfile as sf
 
-    real_tqdm = dapply.tqdm.tqdm
+    duration = float((work.meta or {}).get("duration") or 180)
+    limit = max(900.0, duration * 12)  # generous: CPU separation inside Docker can run several times real time
+    out_dir, prog = ctx.tmp / "demucs", ctx.tmp / "demucs.progress"
+    cmd = [sys.executable, "-m", "resonance.agents.demucs_worker", str(ctx.path(work)), str(out_dir), str(prog),
+           settings.demucs_model, os.environ.get("RESONANCE_DEMUCS_REPO", "")]
+    ctx.progress(0.05, f"Loading separation model '{settings.demucs_model}' (a separate process, so a crash cannot stop the studio)")
     t0 = time.monotonic()
-
-    def reporting(iterable, *args, **kwargs):
-        # Demucs processes the recording in overlapping chunks; report each finished chunk as real progress.
-        items = list(iterable)
-        total = max(1, len(items))
-        last = 0.0
-        for k, item in enumerate(items, 1):
-            yield item
-            now = time.monotonic()
-            if now - last >= 2.0 or k == total:
-                last = now
-                done = k / total
-                elapsed = now - t0
-                eta = elapsed / done * (1 - done) if done > 0 else 0
-                ctx.progress(0.15 + 0.7 * done, f"Separating: chunk {k} of {total}, about {max(0, int(eta // 60))} min {int(eta % 60)} s left")
-
-    dapply.tqdm.tqdm = reporting
-    try:
-        with torch.no_grad():
-            out = apply_model(model, ((wav - mean) / std)[None], device="cpu", shifts=0, split=True, overlap=0.25, progress=True)[0]
-    finally:
-        dapply.tqdm.tqdm = real_tqdm
+    err_path = ctx.tmp / "demucs.stderr"
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, cwd=str(Path(__file__).resolve().parents[2]))
+        last = ""
+        while proc.poll() is None:
+            time.sleep(2.0)
+            elapsed = time.monotonic() - t0
+            if elapsed > limit:
+                proc.kill()
+                proc.wait()
+                raise Blocked(f"Separation was stopped after {int(elapsed // 60)} minutes without finishing. The computer may be too slow or short of memory. "
+                              "Give Docker more CPU and memory (Docker Desktop → Settings → Resources) and run it again. The rest of the analysis continues without stems.")
+            if prog.exists():
+                try:
+                    k, total = (int(x) for x in prog.read_text().split())
+                except ValueError:
+                    continue
+                txt = f"{k}/{total}"
+                if txt != last:
+                    last = txt
+                    done = k / total
+                    eta = (elapsed / done) * (1 - done)
+                    ctx.progress(0.15 + 0.7 * done, f"Separating: chunk {k} of {total}, about {int(eta // 60)} min {int(eta % 60)} s left")
+            elif elapsed > 20 and not last:
+                ctx.progress(0.1, f"Separating: model loaded, processing ({int(elapsed)} s so far)")
+    stderr_tail = err_path.read_text(errors="replace")[-600:]
+    if proc.returncode in (-9, 137) or "Killed" in stderr_tail or "MemoryError" in stderr_tail:
+        raise Blocked("Separation ran out of memory and was stopped. Docker currently has too little memory for this recording. "
+                      "In Docker Desktop → Settings → Resources set Memory to at least 8 GB, click Apply & Restart, then run Source Separation again. "
+                      "The rest of the analysis continues without stems.")
+    if proc.returncode != 0:
+        if "urlopen" in stderr_tail or "Tunnel" in stderr_tail or "HTTP Error" in stderr_tail or "getaddrinfo" in stderr_tail:
+            raise Blocked(f"{SETUP_HELP} (Technical detail: {stderr_tail.strip().splitlines()[-1][:160]})")
+        raise RuntimeError(f"Demucs process failed (exit {proc.returncode}): {stderr_tail.strip().splitlines()[-1] if stderr_tail.strip() else 'no message'}")
     ctx.log(f"Separation took {time.monotonic() - t0:.0f} s")
-    out = (out * std + mean).numpy()  # [sources, channels, n]
+    sr = int((out_dir / "samplerate").read_text())
+    y, _ = aio.load(ctx.path(work))
+    if y.shape[1] == 1:
+        y = np.repeat(y, 2, axis=1)
+    sources = sorted(p.stem for p in out_dir.glob("*.wav"))
+    out = np.stack([sf.read(str(out_dir / f"{n}.wav"), dtype="float32", always_2d=True)[0].T for n in sources])
+    n = min(out.shape[-1], y.shape[0])
+    out, y = out[..., :n], y[:n, :2]
+    ctx.progress(0.88, "Writing stems")
+
+    class _M:  # minimal stand-in for the model object used below
+        pass
+    model = _M()
+    model.sources = sources
     names = list(model.sources)
     ctx.progress(0.85, "Writing stems")
 
