@@ -25,8 +25,10 @@ def _mk(notes: list[dict], uncertain_below: float = 0.6) -> list[Note]:
 @agent("transcription", 3, "Musical Transcription", "Estimates tempo, key, chords, the melody line and polyphonic notes from the audio.")
 def run(ctx: Ctx) -> None:
     work = ctx.working()
-    vocals = ctx.latest_asset("stem", stem="vocals")
+    vocals = ctx.vocal_stem()
     accomp = ctx.latest_asset("stem", stem="accompaniment")
+    raw_vocals = ctx.latest_asset("stem", stem="vocals")
+    silent_vocals = raw_vocals is not None and vocals is None
     ctx.progress(0.03, "Loading audio")
     y, sr = aio.load_mono(ctx.path(work), mu.SR)
     duration = len(y) / sr
@@ -45,7 +47,9 @@ def run(ctx: Ctx) -> None:
         ym, _ = aio.load_mono(ctx.path(vocals), mu.SR)
     else:
         ym = y
-        warnings.append("No separated voice stem was available. The 'melody' is therefore only the highest detected line of the full mix: it follows whatever is on top, voices or instruments, and has gaps.")
+        if silent_vocals:
+            warnings.append("Separation ran, but the voice stem is almost silent (under 3% of the energy): no singing was detected in this recording, so no vocal melody was tracked.")
+        warnings.append("No usable separated voice stem was available. The 'melody' is therefore only the highest detected line of the full mix: it follows whatever is on top, voices or instruments, and has gaps.")
     track = mu.pitch_track(ym, sr)
     melody = mu.split_at_onsets(mu.notes_from_pitch_track(track), ym, sr) if vocals else []
     voiced = np.nan_to_num(track["prob"]) * (~np.isnan(track["f0"]))

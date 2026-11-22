@@ -58,6 +58,14 @@ class Ctx:
                 return a
         return None
 
+    def vocal_stem(self) -> m.Asset | None:
+        """The separated voice stem, but only if it actually contains voices. On instrumental music the
+        separator still writes a 'vocals' file holding faint residue; using it would invent a melody."""
+        a = self.latest_asset("stem", stem="vocals")
+        if a and float((a.meta or {}).get("energy_share", 1.0)) < 0.03:
+            return None
+        return a
+
     def source(self) -> m.Asset:
         a = self.latest_asset("source")
         if not a:

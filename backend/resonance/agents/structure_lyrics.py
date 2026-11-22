@@ -14,7 +14,7 @@ from .base import Ctx, agent, new_version
 
 def vocal_activity(ctx: Ctx) -> tuple[np.ndarray | None, np.ndarray | None, str]:
     """Per-frame 0/1 'someone is singing' estimate and how it was obtained."""
-    vocals = ctx.latest_asset("stem", stem="vocals")
+    vocals = ctx.vocal_stem()
     if vocals:
         yv, sr = aio.load_mono(ctx.path(vocals), mu.SR)
         n = int(0.1 * sr)

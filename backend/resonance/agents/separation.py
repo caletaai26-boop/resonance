@@ -95,6 +95,8 @@ def run(ctx: Ctx) -> None:
         ids[key] = a.id
         result.append({"stem": key, "label": label, "asset_id": a.id, "energy_share": round(share, 3),
                        "rms_db": round(db(float(np.sqrt(np.mean(data**2)))), 1), "warning": warn})
+    if result and result[0]["stem"] == "vocals" and result[0]["energy_share"] < 0.03:
+        result[0]["warning"] = "This stem is almost silent: the model found no singing. It is ignored by the later steps. " + result[0]["warning"]
     ctx.output(
         f"Separated into {len(result)} stems with Demucs ({settings.demucs_model}). Voices carry {result[0]['energy_share'] * 100:.0f}% of the energy.",
         {"engine": prov["engine"], "engine_version": st["version"], "stems": result, "artifacts": ids,

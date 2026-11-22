@@ -1,0 +1,12 @@
+services:
+  resonance:
+    build: .
+    ports: ["8000:8000"]
+    env_file: [{ path: .env, required: false }]
+    volumes:
+      - resonance-data:/data            # database + all audio. Back this volume up.
+      - torch-cache:/root/.cache/torch  # Demucs weights (downloaded once, ~80 MB)
+    restart: unless-stopped
+volumes:
+  resonance-data:
+  torch-cache:
