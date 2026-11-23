@@ -71,3 +71,16 @@ def test_clean_melody_merges_scoops_and_folds_octaves():
     out, stats = mu.clean_melody(notes)
     assert [n["pitch"] for n in out] == [62, 64, 66, 67, 65]
     assert stats["merged_scoops"] == 2 and stats["octave_folded"] == 1
+
+
+def test_instrumental_needs_voice_stem(session_client, tmp_path):
+    """Removing the choir without a separated voice stem must block with an explanation, never fake it."""
+    import fixtures as fx
+    c = session_client
+    out = fx.build(tmp_path / "fx")
+    pid = new_project(c, "instrumental", mode="restore")["id"]
+    c.post(f"/api/projects/{pid}/source", files={"file": ("phone.mp3", open(out["mp3"], "rb"), "audio/mpeg")})
+    c.post(f"/api/projects/{pid}/agents/forensics/run"); drain()
+    c.post(f"/api/projects/{pid}/agents/restore/run", json={"params": {"remove_voices": True}}); drain()
+    a = next(x for x in c.get(f"/api/projects/{pid}/agents").json() if x["key"] == "restore")
+    assert a["status"] == "blocked" and "separated voice stem" in a["job"]["error"]

@@ -28,7 +28,7 @@ export default function ProduceTab() {
   const [master, setMaster] = useState<any>(null);
   const [masterDirty, setMasterDirty] = useState(false);
   const [arr, setArr] = useState<any>(null);
-  const [rp, setRp] = useState({ strength: 0.5, voices_db: 2.5, brightness: 0.6, width: 0.5 });
+  const [rp, setRp] = useState({ strength: 0.5, voices_db: 2.5, brightness: 0.6, width: 0.5, remove_voices: false });
   const restore = s.project.mode === "restore";
   useEffect(() => {
     if (!mixDirty) api.get(`/api/projects/${s.project.id}/doc/mix`).then((d: Doc) => setMix(d.current?.data || d.default)).catch(() => {});
@@ -59,13 +59,17 @@ export default function ProduceTab() {
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-4 mt-4">
             <label><span className="label">Noise reduction: {Math.round(rp.strength * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.strength} onChange={(e) => setRp({ ...rp, strength: Number(e.target.value) })} className="w-full" />
               <span className="text-[12px] text-ivory-mute">Too high dulls quiet singing. 40–60% is usually right.</span></label>
-            <label><span className="label">Bring the choir forward: {rp.voices_db > 0 ? "+" : ""}{rp.voices_db} dB</span><input type="range" min={-3} max={6} step={0.5} value={rp.voices_db} onChange={(e) => setRp({ ...rp, voices_db: Number(e.target.value) })} className="w-full" />
+            <label className={rp.remove_voices ? "opacity-40" : ""}><span className="label">Bring the choir forward: {rp.voices_db > 0 ? "+" : ""}{rp.voices_db} dB</span><input type="range" min={-3} max={6} step={0.5} disabled={rp.remove_voices} value={rp.voices_db} onChange={(e) => setRp({ ...rp, voices_db: Number(e.target.value) })} className="w-full" />
               <span className="text-[12px] text-ivory-mute">Uses the separated voices. Above +4 dB separation artefacts may become audible.</span></label>
             <label><span className="label">Restore brightness: {Math.round(rp.brightness * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.brightness} onChange={(e) => setRp({ ...rp, brightness: Number(e.target.value) })} className="w-full" />
               <span className="text-[12px] text-ivory-mute">Adds the overtones the phone microphone lost. Too much sounds harsh.</span></label>
             <label><span className="label">Stereo width (for mono recordings): {Math.round(rp.width * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.width} onChange={(e) => setRp({ ...rp, width: Number(e.target.value) })} className="w-full" />
               <span className="text-[12px] text-ivory-mute">Played on one speaker it stays identical to the cleaned mono.</span></label>
           </div>
+          <label className="flex gap-3 items-start callout-info cursor-pointer mt-4">
+            <input type="checkbox" className="mt-1 accent-[#c98a5a]" checked={rp.remove_voices} onChange={(e) => setRp({ ...rp, remove_voices: e.target.checked })} />
+            <span><span className="text-ivory">Make an instrumental: remove the choir.</span> Keeps only the separated accompaniment (talking and coughs mostly go with the voices), then cleans and masters it. Where the separator cannot tell organ from voice, a little organ can go too.</span>
+          </label>
           <div className="flex flex-wrap gap-2 mt-4">
             <button className="btn-primary" disabled={s.working} onClick={() => s.runPipeline("restore", { restore: rp })}>{current ? "Enhance again with these settings" : "Enhance and master"}</button>
             {current && <button className="btn" disabled={s.working} onClick={() => s.runAgent("restore", rp)}>Re-enhance only (keep separation)</button>}

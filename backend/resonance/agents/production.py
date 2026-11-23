@@ -308,6 +308,7 @@ def run_restore(ctx: Ctx) -> None:
     voices_db = float(P.get("voices_db", 2.5))
     brightness = float(P.get("brightness", 0.6))
     width = float(P.get("width", 0.5))
+    remove_voices = bool(P.get("remove_voices", False))
     fo = ctx.db.execute(select(m.AgentOutput).where(m.AgentOutput.project_id == ctx.project.id, m.AgentOutput.agent == "forensics")
                         .order_by(m.AgentOutput.created_at.desc())).scalars().first()
     metrics = (fo.data if fo else {}).get("metrics", {}) or {}
@@ -337,12 +338,18 @@ def run_restore(ctx: Ctx) -> None:
         yv, gr_v = dsp.compress(yv, sr, threshold_db=-26, ratio=1.8, attack_ms=30, release_ms=300)
         acc = dsp.eq(acc, sr, [{"type": "highpass", "freq": 35}, {"type": "peak", "freq": 350, "gain_db": -2.0, "q": 0.8}])
         v_rms, a_rms = float(np.sqrt(np.mean(yv ** 2))), float(np.sqrt(np.mean(acc ** 2)))
-        mix = yv * 10 ** (voices_db / 20) + acc
         balance_before = round(20 * np.log10((v_rms + 1e-12) / (a_rms + 1e-12)), 1)
-        steps.append(f"Separated voices brought forward by {voices_db:+.1f} dB (voices were {balance_before:+.1f} dB relative to the accompaniment)")
+        if remove_voices:
+            mix = acc
+            steps.append("Choir removed: only the separated accompaniment is kept (talking and coughs mostly leave with the voices)")
+        else:
+            mix = yv * 10 ** (voices_db / 20) + acc
+            steps.append(f"Separated voices brought forward by {voices_db:+.1f} dB (voices were {balance_before:+.1f} dB relative to the accompaniment)")
         steps.append(f"Noise reduced separately: voices up to {dn_v['max_attenuation_db']} dB, accompaniment up to {dn_a['max_attenuation_db']} dB")
         dn = {"voices": dn_v, "accompaniment": dn_a}
     else:
+        if remove_voices:
+            raise Blocked("Removing the choir needs the separated voice stem, and none is available. Run Source Separation first (it needs the Demucs model).")
         ctx.progress(0.2, f"Reducing steady background noise (strength {strength:.0%})")
         mix, dn = dsp.spectral_denoise(y, sr, strength)
         steps.append(f"Noise reduced by up to {dn['max_attenuation_db']} dB (no separated voice stem was available, so the full mix was cleaned as one)")
@@ -369,8 +376,9 @@ def run_restore(ctx: Ctx) -> None:
     after = {"noise": an.noise_floor(mix.mean(axis=1), sr), "stereo": an.stereo_summary(mix),
              "top_band_db": round(dsp.band_energy_ratio_db(mix, sr, (roll * 1.05, 10000), (500, 2000)), 1)}
     before = {"noise": metrics.get("noise"), "stereo": metrics.get("stereo"), "top_band_db": round(dsp.band_energy_ratio_db(y, sr, (roll * 1.05, 10000), (500, 2000)), 1)}
-    settings_ = {"strength": strength, "voices_db": voices_db, "brightness": brightness, "width": width, "separated": used_stems, "eq": bands}
-    a = ctx.store(out, "mix", "Enhanced original performance", parent=work,
+    settings_ = {"strength": strength, "voices_db": voices_db, "brightness": brightness, "width": width, "separated": used_stems, "eq": bands,
+                 "remove_voices": remove_voices}
+    a = ctx.store(out, "mix", "Instrumental (choir removed)" if remove_voices else "Enhanced original performance", parent=work,
                   method="stem-based restoration: separate, denoise, rebalance, harmonic exciter, mono-safe stereo" if used_stems else "spectral denoise, EQ, harmonic exciter, mono-safe stereo",
                   engine="resonance.dsp" + (" + demucs stems" if used_stems else ""), settings=settings_,
                   meta={"mode": "restore", "lufs": an.integrated_lufs(mix, sr), "before": before, "after": after})
@@ -382,7 +390,9 @@ def run_restore(ctx: Ctx) -> None:
     a.meta = {**a.meta, "reconstruction_id": rec.id}
     gates.invalidate(ctx.db, ctx.project, "render", "A new restoration was produced.")
     ctx.db.commit()
-    ctx.output("Enhanced the original recording. " + " ".join(s_ + "." for s_ in steps) + " The performance itself (every note, every voice) is the original.",
+    ctx.output(("Made an instrumental from the original recording. " if remove_voices else "Enhanced the original recording. ") + " ".join(s_ + "." for s_ in steps)
+               + (" Every remaining note is the original accompaniment; where the separator could not tell organ from voice, a little organ may have left with the choir."
+                  if remove_voices else " The performance itself (every note, every voice) is the original."),
                {"reconstruction_id": rec.id, "mix_asset_id": a.id, "denoise": dn, "eq": bands, "brightness": bw, "steps": steps,
                 "before": before, "after": after, "settings": settings_,
                 "uncertainty": "Noise reduction lowers steady room noise; it cannot remove talking or coughs that overlap the singing, undo the church echo, "
