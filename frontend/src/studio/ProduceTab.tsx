@@ -28,7 +28,7 @@ export default function ProduceTab() {
   const [master, setMaster] = useState<any>(null);
   const [masterDirty, setMasterDirty] = useState(false);
   const [arr, setArr] = useState<any>(null);
-  const [strength, setStrength] = useState(0.5);
+  const [rp, setRp] = useState({ strength: 0.5, voices_db: 2.5, brightness: 0.6, width: 0.5 });
   const restore = s.project.mode === "restore";
   useEffect(() => {
     if (!mixDirty) api.get(`/api/projects/${s.project.id}/doc/mix`).then((d: Doc) => setMix(d.current?.data || d.default)).catch(() => {});
@@ -54,13 +54,23 @@ export default function ProduceTab() {
   return (
     <div className="space-y-4">
       {restore ? (
-        <Panel title="Restore the original performance">
-          <p className="note">Mode A keeps the actual recorded voices and instruments. It lowers steady background noise, corrects the tone, and masters the result. It does not remove talking or coughs, undo reverberation, or repair clipping.</p>
-          <div className="flex flex-wrap items-end gap-4 mt-3">
-            <label className="w-64"><span className="label">Noise reduction strength: {Math.round(strength * 100)}% (up to {Math.round(strength * 18)} dB)</span><input type="range" min={0} max={1} step={0.05} value={strength} onChange={(e) => setStrength(Number(e.target.value))} className="w-full" /></label>
-            <button className="btn-primary" disabled={s.working} onClick={() => s.runPipeline("restore", { restore: { strength } })}>Restore and master</button>
+        <Panel title="Enhance the original performance">
+          <p className="note">Mode A keeps your actual recording: every voice and note is the original. It separates the voices from the accompaniment, cleans each one, brings the choir forward, restores brightness the phone cut off (built from overtones of the notes actually sung), opens a mono recording into stereo, and masters it. It cannot remove talking that overlaps the singing, undo the church echo, or repair distortion.</p>
+          <div className="grid sm:grid-cols-2 gap-x-6 gap-y-4 mt-4">
+            <label><span className="label">Noise reduction: {Math.round(rp.strength * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.strength} onChange={(e) => setRp({ ...rp, strength: Number(e.target.value) })} className="w-full" />
+              <span className="text-[12px] text-ivory-mute">Too high dulls quiet singing. 40–60% is usually right.</span></label>
+            <label><span className="label">Bring the choir forward: {rp.voices_db > 0 ? "+" : ""}{rp.voices_db} dB</span><input type="range" min={-3} max={6} step={0.5} value={rp.voices_db} onChange={(e) => setRp({ ...rp, voices_db: Number(e.target.value) })} className="w-full" />
+              <span className="text-[12px] text-ivory-mute">Uses the separated voices. Above +4 dB separation artefacts may become audible.</span></label>
+            <label><span className="label">Restore brightness: {Math.round(rp.brightness * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.brightness} onChange={(e) => setRp({ ...rp, brightness: Number(e.target.value) })} className="w-full" />
+              <span className="text-[12px] text-ivory-mute">Adds the overtones the phone microphone lost. Too much sounds harsh.</span></label>
+            <label><span className="label">Stereo width (for mono recordings): {Math.round(rp.width * 100)}%</span><input type="range" min={0} max={1} step={0.05} value={rp.width} onChange={(e) => setRp({ ...rp, width: Number(e.target.value) })} className="w-full" />
+              <span className="text-[12px] text-ivory-mute">Played on one speaker it stays identical to the cleaned mono.</span></label>
           </div>
-          <p className="note mt-2">Higher strength removes more hiss but starts to dull quiet singing. Try 50% first and compare.</p>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <button className="btn-primary" disabled={s.working} onClick={() => s.runPipeline("restore", { restore: rp })}>{current ? "Enhance again with these settings" : "Enhance and master"}</button>
+            {current && <button className="btn" disabled={s.working} onClick={() => s.runAgent("restore", rp)}>Re-enhance only (keep separation)</button>}
+          </div>
+          {latest?.notes?.steps?.length > 0 && <ul className="note list-disc pl-5 mt-3 space-y-1">{latest.notes.steps.map((t: string, i: number) => <li key={i}>{t}</li>)}</ul>}
         </Panel>
       ) : (
         <Panel title="Render the reconstruction" action={<StatusChip status={synthEngine?.status || "needs_setup"} label={synthEngine?.status === "ready" ? "FluidSynth ready" : "Renderer needs setup"} />}>

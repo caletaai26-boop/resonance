@@ -44,7 +44,7 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 | | Lyric accuracy | Not available | Reported as "not evaluated" |
 | | Inner-voice accuracy | Not available | Cannot be verified from a mixed recording |
 | Agent 12 Director | Pipelines, dependencies, gate enforcement, status | Works | Deterministic; optional LLM only rewrites findings in plain English |
-| Mode A Restore | Spectral noise reduction, corrective EQ, mastering of the original | Works | Does not remove speech, reverb or clipping |
+| Mode A Restore | Stem-based enhancement of the original: separate voices/accompaniment, denoise each, bring voices forward, restore lost brightness from real overtones (harmonic exciter), mono-safe stereo, master | Works | Does not remove overlapping speech, reverb or clipping. Real recording: voices +2.5 dB, steady noise about −5 dB, top band −18.3 → −13.4 dB |
 | Mode C Creative | Flag permits additions | Partial | No generative service connected (no official Suno API used) |
 | UI | Dashboard, 3-panel studio, waveform/spectrogram, timeline, piano-roll editor, notation view, A/B compare with loop/speed, exports, settings | Works | |
 | Exports | WAV, MP3, stems ZIP, MIDI, MusicXML, lyrics, fidelity JSON, project archive | Works | |
@@ -82,7 +82,7 @@ Legend: **Works** = implemented, real processing, covered by tests. **Partial** 
 - Key: settled from the final cadence (E major → A major, bass A): **A major**, consistent across editions.
 - Verse length: the harmony repeats every **42.1 s** (one verse + refrain), detected from the recording itself.
 - Timing alignment: **weak**. Sung pitches agree with the aligned score 53–55% vs ~30% for a misplaced copy, but the rendered result follows the original's harmony at 0.70 (misaligned baseline 0.63), *worse* than the earlier transcription-based render (0.85), whose chaotic notes were at least derived from the audio. No tempo hypothesis or edition did materially better (0.57–0.61 vs ~0.50 baseline). Likely causes: the choir's arrangement differs from these editions, and/or reverberation blurs the harmony too much for chroma alignment.
-- Restore mode on the same recording: noise floor −21 → −31 dB, music-to-quietest gap 7.0 → 9.4 dB, slight high-frequency lift. A modest, real improvement of the actual performance.
+- Restore mode (stem-based, v2) on the same recording: voices +2.5 dB against the accompaniment, steady noise about 5 dB lower, brightness above 2.2 kHz −18.3 → −13.4 dB relative to the mid range, mastered to −16 LUFS. A real, moderate improvement of the actual performance; not a studio recording.
 
 **Conclusion.** Automatic transcription is not a viable source of the score for a live choir recording of this quality. The workable path is: import a trusted score of the hymn (MusicXML/MIDI) → correct the section timeline → align the score to the recording → listen and fix differences. The alignment step was built in response to this result.
 

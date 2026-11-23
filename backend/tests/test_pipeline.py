@@ -612,11 +612,14 @@ def test_restore_mode_end_to_end(client, fixture_audio):
     for g in (2, 3, 4, 6):
         assert h.approve(c, pid, g).status_code == 409                         # not applicable / nothing to approve
     started = h.ok(c.post(f"/api/projects/{pid}/pipeline/produce", json={"params": {"restore": {"strength": 0.7}}}))
-    assert [j["agent"] for j in started] == ["restore", "mastering"]
+    assert [j["agent"] for j in started] == ["separation", "restore", "mastering"]
     h.drain()
     rs = h.agent_state(c, pid, "restore")
-    assert rs["status"] == "succeeded" and rs["output"]["data"]["denoise"]["max_attenuation_db"] == pytest.approx(12.6)
-    assert "performance itself is untouched" in rs["output"]["summary"]
+    dn = rs["output"]["data"]["denoise"]
+    assert rs["status"] == "succeeded"
+    # with separated voices the accompaniment gets the full strength and the voices 80% of it; without, the full mix gets it
+    assert (dn.get("accompaniment") or dn)["max_attenuation_db"] == pytest.approx(12.6)
+    assert "performance itself (every note, every voice) is the original" in rs["output"]["summary"]
     assert h.agent_state(c, pid, "mastering")["status"] == "succeeded"
     assert h.run_agent(c, pid, "mixing")["status"] == "blocked"                # nothing to mix in restore mode
     rec = h.ok(c.get(f"/api/projects/{pid}/reconstructions"))[0]
@@ -630,7 +633,8 @@ def test_restore_mode_end_to_end(client, fixture_audio):
     assert "FINAL" in r.headers["content-disposition"]
     y, sr = sf.read(io.BytesIO(r.content), always_2d=True)
     assert len(y) / sr == pytest.approx(58.5, abs=0.3)                          # same performance, same length
-    assert an.integrated_lufs(y, sr) == pytest.approx(-20.0, abs=1.0) and an.true_peak_db(y, sr) <= -0.9
+    # restore projects default to the 'everyday listening' target (-16 LUFS); choral projects to -20
+    assert an.integrated_lufs(y, sr) == pytest.approx(-16.0, abs=1.0) and an.true_peak_db(y, sr) <= -0.9
     # the restored audio is still the original performance: sample-aligned and correlated with the working copy
     with SessionLocal() as db:
         work = db.execute(select(m.Asset).where(m.Asset.project_id == pid, m.Asset.kind == "working")).scalars().one()

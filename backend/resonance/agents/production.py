@@ -19,6 +19,8 @@ PROGRAM_NAMES = {v: k for k, v in GM_PROGRAMS.items()}
 DEFAULT_PAN = {"melody": 0.0, "soprano": -0.25, "alto": 0.25, "tenor": -0.12, "bass": 0.0, "harmony": 0.18, "accompaniment": 0.0}
 
 MASTER_TARGETS = {
+    "everyday_listening": {"label": "Everyday listening (phone, car)", "lufs": -16.0, "ceiling_db": -1.0,
+                           "explain": "Comfortable level next to other music on a phone or in the car, with the dynamics kept."},
     "sacred_choral": {"label": "Sacred choral (natural dynamics)", "lufs": -20.0, "ceiling_db": -1.0,
                       "explain": "Quiet passages stay quiet. Recommended for choir and organ."},
     "broadcast_r128": {"label": "Broadcast (EBU R128)", "lufs": -23.0, "ceiling_db": -1.0, "explain": "European broadcast standard."},
@@ -298,39 +300,93 @@ def run_mix(ctx: Ctx) -> None:
                 "uncertainty": "The church acoustic is an algorithmic room model, not a measured impulse response of a real building."})
 
 
-@agent("restore", 0, "Restoration (Mode A)", "Cleans the ORIGINAL performance: noise reduction and tonal correction. No notes or performers are replaced.")
+@agent("restore", 0, "Restoration (Mode A)", "Enhances the ORIGINAL performance: separates voices from accompaniment, cleans each, restores brightness and width. No notes or performers are replaced.")
 def run_restore(ctx: Ctx) -> None:
     work = ctx.working()
-    strength = float(ctx.params.get("strength", 0.5))
+    P = ctx.params
+    strength = float(P.get("strength", 0.5))
+    voices_db = float(P.get("voices_db", 2.5))
+    brightness = float(P.get("brightness", 0.6))
+    width = float(P.get("width", 0.5))
     fo = ctx.db.execute(select(m.AgentOutput).where(m.AgentOutput.project_id == ctx.project.id, m.AgentOutput.agent == "forensics")
                         .order_by(m.AgentOutput.created_at.desc())).scalars().first()
-    ctx.progress(0.1, "Loading the original performance")
+    metrics = (fo.data if fo else {}).get("metrics", {}) or {}
+    ctx.progress(0.05, "Loading the original performance")
     y, sr = aio.load(ctx.path(work))
     y = dsp.to_stereo(y)
     y -= y.mean(axis=0, keepdims=True)
-    ctx.progress(0.3, f"Reducing steady background noise (strength {strength:.0%})")
-    y, dn = dsp.spectral_denoise(y, sr, strength)
-    bands = dsp.tonal_tilt_bands(((fo.data if fo else {}).get("metrics", {}).get("spectrum", {}) or {}).get("band_energy_db", {})) if ctx.params.get("tonal_eq", True) else []
-    ctx.progress(0.7, "Applying gentle tonal correction")
-    y = dsp.eq(y, sr, bands)
-    peak = float(np.max(np.abs(y))) + 1e-12
+    n = len(y)
+    steps: list[str] = []
+    vstem = ctx.vocal_stem() if P.get("separated", True) else None
+    used_stems = False
+    if vstem:
+        yv, vsr = aio.load(ctx.path(vstem))
+        if vsr != sr:
+            import librosa
+            yv = librosa.resample(yv.T, orig_sr=vsr, target_sr=sr).T
+        yv = dsp.to_stereo(yv)
+        if len(yv) < n:
+            yv = np.concatenate([yv, np.zeros((n - len(yv), 2))])
+        yv = yv[:n]
+        acc = y - yv  # accompaniment = original minus voices: equal gains rebuild the original exactly
+        used_stems = True
+        ctx.progress(0.2, f"Cleaning the voices and the accompaniment separately (noise reduction {strength:.0%})")
+        yv, dn_v = dsp.spectral_denoise(yv, sr, strength * 0.8)  # gentler on voices: protects soft consonants
+        acc, dn_a = dsp.spectral_denoise(acc, sr, strength)      # room noise and chatter mostly sit here
+        yv = dsp.eq(yv, sr, [{"type": "highpass", "freq": 90}, {"type": "peak", "freq": 1600, "gain_db": 2.0, "q": 0.9}])
+        yv, gr_v = dsp.compress(yv, sr, threshold_db=-26, ratio=1.8, attack_ms=30, release_ms=300)
+        acc = dsp.eq(acc, sr, [{"type": "highpass", "freq": 35}, {"type": "peak", "freq": 350, "gain_db": -2.0, "q": 0.8}])
+        v_rms, a_rms = float(np.sqrt(np.mean(yv ** 2))), float(np.sqrt(np.mean(acc ** 2)))
+        mix = yv * 10 ** (voices_db / 20) + acc
+        balance_before = round(20 * np.log10((v_rms + 1e-12) / (a_rms + 1e-12)), 1)
+        steps.append(f"Separated voices brought forward by {voices_db:+.1f} dB (voices were {balance_before:+.1f} dB relative to the accompaniment)")
+        steps.append(f"Noise reduced separately: voices up to {dn_v['max_attenuation_db']} dB, accompaniment up to {dn_a['max_attenuation_db']} dB")
+        dn = {"voices": dn_v, "accompaniment": dn_a}
+    else:
+        ctx.progress(0.2, f"Reducing steady background noise (strength {strength:.0%})")
+        mix, dn = dsp.spectral_denoise(y, sr, strength)
+        steps.append(f"Noise reduced by up to {dn['max_attenuation_db']} dB (no separated voice stem was available, so the full mix was cleaned as one)")
+    ctx.progress(0.55, "Correcting tone")
+    bands = [b for b in dsp.tonal_tilt_bands((metrics.get("spectrum") or {}).get("band_energy_db", {})) if b["type"] != "highshelf"] if P.get("tonal_eq", True) else []
+    mix = dsp.eq(mix, sr, bands)
+    roll = float((metrics.get("spectrum") or {}).get("rolloff_99_hz") or 8000)
+    bw = {"added_db": None}
+    if brightness > 0 and roll < 9000:
+        ctx.progress(0.65, f"Restoring brightness above {roll / 1000:.1f} kHz from the harmonics of the real voices")
+        mix, bw = dsp.harmonic_exciter(mix, sr, brightness, src=(max(300.0, roll * 0.32), roll), cutoff=roll * 1.05, target_db=-12.0)
+        steps.append(f"Brightness restored above {roll / 1000:.1f} kHz: top band {bw['top_band_before_db']} dB -> {bw['top_band_after_db']} dB relative to the mid range, "
+                     "built from overtones of the notes actually sung")
+    st = an.stereo_summary(mix)
+    if width > 0 and (not st["is_stereo"] or st.get("effectively_mono")):
+        ctx.progress(0.8, "Creating a stereo image (the mono sum is left unchanged)")
+        mix = dsp.decorrelated_stereo(mix.mean(axis=1), sr, width)
+        steps.append(f"Mono recording opened into stereo (width {width:.0%}); played back on one speaker it is identical to the cleaned mono")
+    peak = float(np.max(np.abs(mix))) + 1e-12
     if peak > 10 ** (-3 / 20):
-        y *= 10 ** (-3 / 20) / peak
+        mix *= 10 ** (-3 / 20) / peak
     out = ctx.tmp / "restored.wav"
-    aio.save_wav(out, y, sr)
-    a = ctx.store(out, "mix", "Restored original performance", parent=work, method="spectral gating noise reduction + corrective EQ", engine="resonance.dsp",
-                  settings={"strength": strength, "eq": bands, **dn}, meta={"mode": "restore", "lufs": an.integrated_lufs(y, sr)})
-    n = ctx.db.execute(select(func.max(m.Reconstruction.version)).where(m.Reconstruction.project_id == ctx.project.id)).scalar() or 0
-    rec = m.Reconstruction(project_id=ctx.project.id, version=n + 1, mode="restore", stem_asset_ids=[], mix_asset_id=a.id, status="mixed",
-                           notes={"restore": {"strength": strength, "eq": bands}})
+    aio.save_wav(out, mix, sr)
+    after = {"noise": an.noise_floor(mix.mean(axis=1), sr), "stereo": an.stereo_summary(mix),
+             "top_band_db": round(dsp.band_energy_ratio_db(mix, sr, (roll * 1.05, 10000), (500, 2000)), 1)}
+    before = {"noise": metrics.get("noise"), "stereo": metrics.get("stereo"), "top_band_db": round(dsp.band_energy_ratio_db(y, sr, (roll * 1.05, 10000), (500, 2000)), 1)}
+    settings_ = {"strength": strength, "voices_db": voices_db, "brightness": brightness, "width": width, "separated": used_stems, "eq": bands}
+    a = ctx.store(out, "mix", "Enhanced original performance", parent=work,
+                  method="stem-based restoration: separate, denoise, rebalance, harmonic exciter, mono-safe stereo" if used_stems else "spectral denoise, EQ, harmonic exciter, mono-safe stereo",
+                  engine="resonance.dsp" + (" + demucs stems" if used_stems else ""), settings=settings_,
+                  meta={"mode": "restore", "lufs": an.integrated_lufs(mix, sr), "before": before, "after": after})
+    nver = ctx.db.execute(select(func.max(m.Reconstruction.version)).where(m.Reconstruction.project_id == ctx.project.id)).scalar() or 0
+    rec = m.Reconstruction(project_id=ctx.project.id, version=nver + 1, mode="restore", stem_asset_ids=[], mix_asset_id=a.id, status="mixed",
+                           notes={"restore": settings_, "steps": steps})
     ctx.db.add(rec)
     ctx.db.flush()
     a.meta = {**a.meta, "reconstruction_id": rec.id}
     gates.invalidate(ctx.db, ctx.project, "render", "A new restoration was produced.")
     ctx.db.commit()
-    ctx.output(f"Restored the original recording: up to {dn['max_attenuation_db']} dB of steady-noise reduction and {len(bands)} corrective EQ band(s). The performance itself is untouched.",
-               {"reconstruction_id": rec.id, "mix_asset_id": a.id, "denoise": dn, "eq": bands,
-                "uncertainty": "Spectral gating lowers constant hiss and room tone. It does not remove talking, coughs, or reverberation, and cannot repair clipping."})
+    ctx.output("Enhanced the original recording. " + " ".join(s_ + "." for s_ in steps) + " The performance itself (every note, every voice) is the original.",
+               {"reconstruction_id": rec.id, "mix_asset_id": a.id, "denoise": dn, "eq": bands, "brightness": bw, "steps": steps,
+                "before": before, "after": after, "settings": settings_,
+                "uncertainty": "Noise reduction lowers steady room noise; it cannot remove talking or coughs that overlap the singing, undo the church echo, "
+                               "or repair distortion. The restored brightness is made of overtones of the real notes; it adds clarity, not detail that was never recorded."})
 
 
 @agent("mastering", 10, "Mastering Engineer", "Sets final loudness and peak level and writes WAV and MP3 masters.")
@@ -341,7 +397,8 @@ def run_master(ctx: Ctx) -> None:
         raise Blocked("This render has not been mixed yet. Run the Mixing Engineer first.")
     mset = ctx.head(m.MasterSettings, "master")
     if not mset:
-        mset = new_version(ctx.db, ctx.project, m.MasterSettings, "master", {"target": "sacred_choral", "tilt_db": 0.0}, origin="default", note="Default mastering target")
+        default_target = "everyday_listening" if ctx.project.mode == "restore" else "sacred_choral"
+        mset = new_version(ctx.db, ctx.project, m.MasterSettings, "master", {"target": default_target, "tilt_db": 0.0}, origin="default", note="Default mastering target")
         ctx.db.commit()
     key = mset.data.get("target", "sacred_choral")
     tgt = MASTER_TARGETS.get(key) or MASTER_TARGETS["sacred_choral"]

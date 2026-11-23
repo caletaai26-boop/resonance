@@ -217,3 +217,67 @@ def normalize_loudness(y: np.ndarray, sr: int, target_lufs: float) -> tuple[np.n
     if cur is None:
         return y, None
     return y * 10 ** ((target_lufs - cur) / 20), cur
+
+
+# ---------- enhancement (Restore mode) -----------------------------------------------------------
+def band_energy_ratio_db(y: np.ndarray, sr: int, hi: tuple[float, float], ref: tuple[float, float]) -> float:
+    mono = y.mean(axis=1) if y.ndim > 1 else y
+    f, pxx = signal.welch(mono, sr, nperseg=8192)
+    e = lambda a, b: float(np.sum(pxx[(f >= a) & (f < b)])) + 1e-20
+    return 10 * np.log10(e(*hi) / e(*ref))
+
+
+def harmonic_exciter(y: np.ndarray, sr: int, amount: float = 0.5, src: tuple[float, float] = (700.0, 2200.0),
+                     cutoff: float | None = None, target_db: float = -18.0) -> tuple[np.ndarray, dict]:
+    """Rebuild missing brightness from what IS there. A phone mic and lossy codec cut the top octaves, but the
+    surviving 0.7-2.2 kHz band carries the pitch of every voice. Driving that band through a soft saturator
+    creates its harmonics (exactly the overtones that were lost: integer multiples of the real notes); we keep
+    only the part above the original cutoff and add it at a level chosen from the measured spectrum. This is the
+    classic 'exciter' / bandwidth-extension technique. It adds plausible overtones of the real performance; it
+    cannot recover consonants or noises that were never captured. amount 0..1 scales how close the new top
+    octave is brought to the target balance (target_db below the 0.5-2 kHz band)."""
+    amount = float(np.clip(amount, 0, 1))
+    if amount <= 0:
+        return y, {"added_db": None}
+    mono_in = y.ndim == 1
+    Y = y[:, None] if mono_in else y
+    sos_bp = signal.butter(4, [src[0] / (sr / 2), min(src[1], sr / 2 - 100) / (sr / 2)], "bandpass", output="sos")
+    cut = cutoff or src[1] * 1.05
+    sos_hp = signal.butter(6, min(cut, sr / 2 - 200) / (sr / 2), "highpass", output="sos")
+    out = np.zeros_like(Y, dtype=np.float64)
+    for c in range(Y.shape[1]):
+        band = signal.sosfiltfilt(sos_bp, Y[:, c])
+        env = np.sqrt(np.maximum(signal.sosfiltfilt(signal.butter(2, 8 / (sr / 2), output="sos"), band ** 2), 0.0) + 1e-12)
+        drive = band / (env * 1.2 + 1e-6)          # level-independent drive: quiet and loud passages get the same colour
+        h = np.tanh(2.5 * drive) * env              # soft saturation -> odd harmonics; scaled back to the band's level
+        h += 0.35 * (np.abs(np.tanh(2.0 * drive)) * env - np.mean(np.abs(np.tanh(2.0 * drive)) * env))  # a little even-order warmth
+        out[:, c] = signal.sosfiltfilt(sos_hp, h)
+    before = band_energy_ratio_db(Y, sr, (cut, min(10000, sr / 2 - 1)), (500, 2000))
+    # choose gain so that (existing top + added top) reaches the target balance, scaled by `amount`
+    f, p_y = signal.welch(Y.mean(axis=1), sr, nperseg=8192)
+    _, p_h = signal.welch(out.mean(axis=1), sr, nperseg=8192)
+    ref = float(np.sum(p_y[(f >= 500) & (f < 2000)]))
+    top_y = float(np.sum(p_y[(f >= cut) & (f < 10000)]))
+    top_h = float(np.sum(p_h[(f >= cut) & (f < 10000)])) + 1e-20
+    want = ref * 10 ** ((before + amount * (target_db - before)) / 10) if before < target_db else top_y
+    g = np.sqrt(max(0.0, want - top_y) / top_h)
+    g = float(min(g, 4.0))
+    res = Y + g * out
+    after = band_energy_ratio_db(res, sr, (cut, min(10000, sr / 2 - 1)), (500, 2000))
+    return (res[:, 0] if mono_in else res), {"top_band_before_db": round(before, 1), "top_band_after_db": round(after, 1), "gain": round(g, 3), "cutoff_hz": round(cut)}
+
+
+def decorrelated_stereo(mono: np.ndarray, sr: int, width: float = 0.6, seed: int = 11) -> np.ndarray:
+    """Mono -> stereo without changing the mono sum (L+R = 2*mono, so it stays faithful on a phone speaker).
+    The side signal is the mono signal passed through a short random-phase diffusion filter (decorrelation),
+    kept out of the bass. width 0..1."""
+    rng = np.random.default_rng(seed)
+    n = int(0.025 * sr)
+    t = np.arange(n) / sr
+    ir = rng.standard_normal(n) * np.exp(-t / 0.006)
+    ir -= ir.mean()
+    ir /= np.sqrt(np.sum(ir ** 2)) + 1e-12
+    side = signal.fftconvolve(mono, ir)[: len(mono)]
+    side = signal.sosfiltfilt(signal.butter(2, 250 / (sr / 2), "highpass", output="sos"), side)
+    side *= float(np.clip(width, 0, 1)) * 0.5
+    return np.stack([mono + side, mono - side], axis=1)

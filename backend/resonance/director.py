@@ -13,7 +13,7 @@ PIPELINES = {
     # name -> ordered agents; each waits for the previous one ('blocked' steps do not stop the chain)
     "analyse": ["forensics", "separation", "transcription", "structure"],
     "produce": ["instrumental", "mixing", "mastering", "fidelity"],
-    "restore": ["restore", "mastering"],
+    "restore": ["separation", "restore", "mastering"],
 }
 
 
